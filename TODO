@@ -1,3 +1,9 @@
 channels.readthedocs
 
 routing(urls) and consumers(views)
+
+
+websocket consumer - async
+
+async_to_sync(self.get_user)(get_userga beriladigan argumentlar) - ???
+async_to_sync(async_to_syncga beriladigan funksiyalar)
