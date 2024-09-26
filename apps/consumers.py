@@ -1,40 +1,152 @@
-import json
+import ujson
+from asgiref.sync import sync_to_async
+from channels.generic.websocket import AsyncJsonWebsocketConsumer
+from django.contrib.auth.models import User
+from django.forms import model_to_dict
 
-from asgiref.sync import async_to_sync
-from channels.generic.websocket import WebsocketConsumer
+from apps.models import Message, Room
 
 
-class ChatConsumer(WebsocketConsumer):
-    def connect(self):
-        self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
-        self.room_group_name = f"chat_{self.room_name}"
+class CustomAsyncJsonWebsocketConsumer(AsyncJsonWebsocketConsumer):
 
-        # Join room group
-        async_to_sync(self.channel_layer.group_add)(
-            self.room_group_name, self.channel_name
+    async def receive(self, text_data=None, bytes_data=None, **kwargs):
+        if not isinstance(text_data, dict):
+            await self.send_json({'message': 'xabar json bolishi shart'})
+            return
+        return await super().receive(text_data, bytes_data, **kwargs)
+
+    @classmethod
+    async def decode_json(cls, text_data):
+        return ujson.loads(text_data)
+
+    @classmethod
+    async def encode_json(cls, content):
+        return ujson.dumps(content)
+
+
+class ChatConsumer(CustomAsyncJsonWebsocketConsumer):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(args, kwargs)
+        self.room_name = None
+        self.room_group_name = None
+        self.room = None
+        self.user = None
+        self.user_inbox = None
+
+    async def is_authenticate(self) -> bool:
+        if self.user.is_anonymous:
+            await self.send_json({'message': 'login is required!'})
+            await self.disconnect(0)
+            await self.close()
+            return False
+        return True
+
+    async def connect(self):
+        self.user = self.scope['user']
+        # connection has to be accepted
+        await self.accept()
+        if not await self.is_authenticate():
+            return
+
+        self.room_name = self.scope['url_route']['kwargs']['room_name']
+        self.room_group_name = f'chat_{self.room_name}'
+        self.room = await Room.objects.aget(name=self.room_name)
+        self.user_inbox = f'inbox_{self.user.id}'
+
+        # # join the room group
+        # await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+
+        # send the user list to the newly joined user
+        # user_list = []
+        # async for user in self.room.online.all():
+        #     user_list.append(user.username)
+        #
+        # await self.send_json({
+        #     'type': 'user_list',
+        #     'users': user_list,
+        # })
+
+        # create a user inbox for private messages
+        await self.channel_layer.group_add(self.user_inbox, self.channel_name)
+
+        # send the join event to the room
+        await self.notify_status()
+        # await self.room_update_user(self.room, self.user)
+
+    async def notify_status(self, is_connected: bool = True):
+        pass
+        # await self.channel_layer.group_send(
+        #     self.room_group_name,
+        #     {
+        #         'type': 'user_join',
+        #         'user': model_to_dict(self.user, ('id', 'username')),
+        #     }
+        # )
+
+    # @sync_to_async
+    # def room_update_user(self, room, user, action: str = 'add'):
+    #     getattr(room.online, action)(user)
+
+    async def disconnect(self, close_code):
+        # delete the user inbox for private messages
+        await self.channel_layer.group_discard(self.user_inbox, self.channel_name, )
+
+        # # send the leave event to the room
+        # await self.channel_layer.group_send(
+        #     self.room_group_name,
+        #     {
+        #         'type': 'user_leave',
+        #         'user': self.user.username,
+        #     }
+        # )
+        # self.room_update_user(self.room, self.user, 'remove')
+
+    async def receive_json(self, content, **kwargs):
+        if not (len(set(content) & {'target', 'type'}) > 1):
+            await self.send_json({'message': 'xabar yuboriladigan user idni kiriting'})
+            return
+
+        if content['type'] == 'private':
+            msg = await Message.objects.acreate(user=self.user, room=self.room, text=content['message'])
+            # send private message to the target
+            await self.channel_layer.group_send(
+                f"inbox_{content['target']}",
+                {
+                    'type': 'private_message',
+                    'user': model_to_dict(self.user, ('id', 'username')),
+                    'message': model_to_dict(msg, ('id', 'text')),
+                }
+            )
+            # send private message delivered to the user
+            await self.send_json({
+                'type': 'chat_message',
+                'target': content['target'],
+                'message': model_to_dict(msg, ('id', 'text')),
+            })
+            return
+
+        # send chat message event to the room
+        await self.channel_layer.group_send(
+            self.room_group_name,
+            {
+                'type': 'chat_message',
+                'user': model_to_dict(self.user, ('id', 'username')),
+                'message': content['message'],
+            }
         )
 
-        self.accept()
+    async def chat_message(self, event):
+        await self.send_json(event)
 
-    def disconnect(self, close_code):
-        # Leave room group
-        async_to_sync(self.channel_layer.group_discard)(
-            self.room_group_name, self.channel_name
-        )
+    async def user_join(self, event):
+        await self.send_json(event)
 
-    # Receive message from WebSocket
-    def receive(self, text_data):
-        text_data_json = json.loads(text_data)
-        message = text_data_json["message"]
+    async def user_leave(self, event):
+        await self.send_json(event)
 
-        # Send message to room group
-        async_to_sync(self.channel_layer.group_send)(
-            self.room_group_name, {"type": "chat.message", "message": message}
-        )
+    async def private_message(self, event):
+        await self.send_json(event)
 
-    # Receive message from room group
-    def chat_message(self, event):
-        message = event["message"]
-
-        # Send message to WebSocket
-        self.send(text_data=json.dumps({"message": message}))
+    async def private_message_delivered(self, event):
+        await self.send_json(event)

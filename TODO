@@ -1,9 +1,34 @@
-channels.readthedocs
+channels.readthedocs - kanal
 
 routing(urls) and consumers(views)
-
-
-websocket consumer - async
+manage.py dbshell - how to run database when docker already turn on
 
 async_to_sync(self.get_user)(get_userga beriladigan argumentlar) - ???
 async_to_sync(async_to_syncga beriladigan funksiyalar)
+
+
+ujson +
+projectga postgres ulash +
+token +
+middleware +
+fayl yuborish
+user online bo'ldi, chiqib ketdi
+websocket consumers
+
+async kutubxonalar, funcksiyalar
+elastic search
+graphql
+sqlinjection?
+swagger
+django channels
+django signals
+model_to_dict>
+
+poetry delete and add in formal way
+
+
+Project ideas:
+online shashka-websocket
+
+
+django session system ?
