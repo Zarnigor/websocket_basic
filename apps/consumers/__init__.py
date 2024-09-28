@@ -1,0 +1,1 @@
+from apps.consumers.main import ChatConsumer
